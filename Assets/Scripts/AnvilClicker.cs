@@ -1,4 +1,3 @@
-using System.Collections;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -13,9 +12,6 @@ using UnityEngine.InputSystem;
 public class AnvilClicker : MonoBehaviour
 {
     [Header("Referencias")]
-    [Tooltip("SpriteRenderer da faisca que aparece quando acerta a bigorna")]
-    public SpriteRenderer hitSpark;
-
     [Tooltip("Prefab do FloatingText (+1, +2, Cansado!...)")]
     public GameObject floatingTextPrefab;
 
@@ -26,9 +22,6 @@ public class AnvilClicker : MonoBehaviour
     [Tooltip("Deslocamento a partir da posicao do mouse, em unidades do mundo")]
     public Vector3 floatingTextOffset = new Vector3(0f, 0.3f, 0f);
 
-    [Header("Faisca")]
-    public float sparkDuration = 0.18f;
-
     [Header("Colisao da martelada")]
     [Tooltip("Raio (em unidades do mundo) de tolerancia ao redor da cabeca do martelo pra considerar que ela encostou na bigorna. 0 = exige que o ponto da cabeca esteja exatamente dentro do collider da bigorna.")]
     public float hammerHeadHitRadius = 0.4f;
@@ -36,21 +29,12 @@ public class AnvilClicker : MonoBehaviour
     /// <summary>Usado por outros scripts (ex: UIManager) pra mostrar um aviso com o mesmo estilo de texto flutuante.</summary>
     public static AnvilClicker Instance { get; private set; }
 
-    private Coroutine sparkRoutine;
     private Collider2D anvilCollider;
 
     private void Awake()
     {
         Instance = this;
         anvilCollider = GetComponent<Collider2D>();
-    }
-
-    private void Start()
-    {
-        if (hitSpark != null)
-        {
-            hitSpark.gameObject.SetActive(false);
-        }
     }
 
     // OnMouseDown so serve mais de dica ("Pegue o martelo!") quando o jogador
@@ -124,7 +108,6 @@ public class AnvilClicker : MonoBehaviour
         bool isCrit = GameManager.Instance.LastHitWasCrit;
 
         SpawnFloatingText(isCrit ? "<color=#FFD24C>+" + amount + " CRITICO!</color>" : "+" + amount);
-        ShowSpark();
         // A animacao de martelada agora roda em QUALQUER clique (ver
         // HammerFollowMouse.Update()), entao nao precisa disparar de novo aqui.
     }
@@ -177,40 +160,5 @@ public class AnvilClicker : MonoBehaviour
         return floatingTextSpawnPoint != null
             ? floatingTextSpawnPoint.position
             : transform.position + Vector3.up * 0.5f;
-    }
-
-    /// <summary>Mostra a faisca por cima da bigorna, no lugar da bigorna "balancando".</summary>
-    private void ShowSpark()
-    {
-        if (hitSpark == null) return;
-
-        if (sparkRoutine != null)
-        {
-            StopCoroutine(sparkRoutine);
-        }
-        sparkRoutine = StartCoroutine(SparkRoutine());
-    }
-
-    private IEnumerator SparkRoutine()
-    {
-        hitSpark.gameObject.SetActive(true);
-
-        Color c = hitSpark.color;
-        c.a = 1f;
-        hitSpark.color = c;
-        hitSpark.transform.localScale = Vector3.one * 0.6f;
-
-        float t = 0f;
-        while (t < sparkDuration)
-        {
-            t += Time.deltaTime;
-            float p = t / sparkDuration;
-            hitSpark.transform.localScale = Vector3.Lerp(Vector3.one * 0.6f, Vector3.one * 1.15f, p);
-            c.a = Mathf.Lerp(1f, 0f, p);
-            hitSpark.color = c;
-            yield return null;
-        }
-
-        hitSpark.gameObject.SetActive(false);
     }
 }

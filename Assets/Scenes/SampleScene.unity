@@ -698,11 +698,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7cf3947d692affc4d9812dcfa333a6ec, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::AnvilClicker
-  hitSpark: {fileID: 0}
   floatingTextPrefab: {fileID: 1213006445}
   floatingTextSpawnPoint: {fileID: 0}
   floatingTextOffset: {x: -0.6, y: 0.05, z: 0}
-  sparkDuration: 0.18
   hammerHeadHitRadius: 0.4
 --- !u!61 &426054036
 BoxCollider2D:
