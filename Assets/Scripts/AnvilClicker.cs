@@ -1,48 +1,106 @@
 using System.Collections;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 /// <summary>
-/// Detecta o clique/toque na bigorna, manda o GameManager somar ouro,
-/// anima o martelo batendo e mostra o texto "+N" flutuante.
+/// Detecta o clique/toque na bigorna, respeita a resistencia do braco
+/// (obstaculo), manda o GameManager somar ouro, anima o martelo batendo
+/// e mostra o texto flutuante ("+N" ou "Cansado!") nascendo em cima do
+/// mouse/martelo, em vez de um ponto fixo na bigorna.
 /// Coloque este script no GameObject da Bigorna (precisa ter um
 /// Collider2D marcado, ex: BoxCollider2D ou PolygonCollider2D).
 /// </summary>
 public class AnvilClicker : MonoBehaviour
 {
     [Header("Referencias")]
-    [Tooltip("Transform do martelo, pra animar a batida")]
-    public Transform hammer;
+    [Tooltip("SpriteRenderer da faisca que aparece quando acerta a bigorna")]
+    public SpriteRenderer hitSpark;
 
-    [Tooltip("Prefab do FloatingText (+1, +2...)")]
+    [Tooltip("Prefab do FloatingText (+1, +2, Cansado!...)")]
     public GameObject floatingTextPrefab;
 
-    [Tooltip("Onde o texto flutuante nasce (opcional, usa a propria bigorna se vazio)")]
+    [Tooltip("Onde o texto flutuante nasce, caso o mouse nao seja detectado (fallback)")]
     public Transform floatingTextSpawnPoint;
 
-    [Header("Animacao")]
-    public float swingAngle = 55f;
-    public float swingDuration = 0.12f;
-    public float punchScale = 0.08f;
+    [Header("Texto flutuante")]
+    [Tooltip("Deslocamento a partir da posicao do mouse, em unidades do mundo")]
+    public Vector3 floatingTextOffset = new Vector3(0f, 0.3f, 0f);
 
-    private bool isSwinging;
-    private Vector3 anvilBaseScale;
-    private Quaternion hammerRestRotation;
+    [Header("Faisca")]
+    public float sparkDuration = 0.18f;
+
+    [Header("Colisao da martelada")]
+    [Tooltip("Raio (em unidades do mundo) de tolerancia ao redor da cabeca do martelo pra considerar que ela encostou na bigorna. 0 = exige que o ponto da cabeca esteja exatamente dentro do collider da bigorna.")]
+    public float hammerHeadHitRadius = 0.4f;
+
+    /// <summary>Usado por outros scripts (ex: UIManager) pra mostrar um aviso com o mesmo estilo de texto flutuante.</summary>
+    public static AnvilClicker Instance { get; private set; }
+
+    private Coroutine sparkRoutine;
+    private Collider2D anvilCollider;
+
+    private void Awake()
+    {
+        Instance = this;
+        anvilCollider = GetComponent<Collider2D>();
+    }
 
     private void Start()
     {
-        anvilBaseScale = transform.localScale;
-
-        if (hammer != null)
+        if (hitSpark != null)
         {
-            hammerRestRotation = hammer.localRotation;
+            hitSpark.gameObject.SetActive(false);
         }
     }
 
-    // OnMouseDown funciona tanto pra clique de mouse (Editor/PC)
-    // quanto pra toque na tela em builds mobile.
+    // OnMouseDown so serve mais de dica ("Pegue o martelo!") quando o jogador
+    // clica direto em cima da bigorna sem o martelo na mao.
     private void OnMouseDown()
     {
-        HandleHit();
+        if (HammerFollowMouse.Instance != null && HammerFollowMouse.Instance.IsHolding) return;
+        if (ShopManager.Instance != null && ShopManager.Instance.IsShopOpen) return;
+
+        SpawnFloatingText("Pegue o martelo!");
+    }
+
+    // O jogador martela em QUALQUER clique, em qualquer lugar da tela (o
+    // HammerFollowMouse cuida da animacao independente disso). Aqui a gente
+    // so decide se aquele golpe realmente vale ouro: conta toda vez que a
+    // CABECA do martelo estiver encostando na bigorna no instante do clique -
+    // nao depende mais de acertar o clique exatamente em cima dela (o cursor
+    // de verdade fica escondido e deslocado da luva desenhada na tela).
+    private void Update()
+    {
+        if (Mouse.current == null) return;
+        if (!Mouse.current.leftButton.wasPressedThisFrame) return;
+
+        if (HammerFollowMouse.Instance == null || !HammerFollowMouse.Instance.IsHolding) return;
+        if (HammerFollowMouse.Instance.JustPickedUpThisFrame) return;
+        if (ShopManager.Instance != null && ShopManager.Instance.IsShopOpen) return;
+        // Trava a bigorna durante TODO o evento de horde (nao so a luta) -
+        // assim o ouro por martelada tambem para de contar a partir do
+        // instante exato em que o marco e cruzado.
+        if (HordeManager.Instance != null && HordeManager.Instance.IsHordeInProgress) return;
+
+        Vector3 headWorldPos = HammerFollowMouse.Instance.GetHammerHeadWorldPosition();
+        if (IsHammerHeadTouchingAnvil(headWorldPos))
+        {
+            HandleHit();
+        }
+    }
+
+    /// <summary>Testa se a cabeca do martelo (ponto no mundo) esta encostando no collider da bigorna.</summary>
+    private bool IsHammerHeadTouchingAnvil(Vector3 headWorldPos)
+    {
+        if (anvilCollider == null) return false;
+
+        if (hammerHeadHitRadius <= 0f)
+        {
+            return anvilCollider.OverlapPoint(headWorldPos);
+        }
+
+        Collider2D hit = Physics2D.OverlapCircle(headWorldPos, hammerHeadHitRadius);
+        return hit != null && hit.gameObject == gameObject;
     }
 
     private void HandleHit()
@@ -53,25 +111,30 @@ public class AnvilClicker : MonoBehaviour
             return;
         }
 
-        int amount = GameManager.Instance.GoldPerClick;
-        GameManager.Instance.AddGold(amount);
-
-        SpawnFloatingText("+" + amount);
-        PunchAnvil();
-
-        if (hammer != null && !isSwinging)
+        // Obstaculo: sem resistencia suficiente, a martelada nao rende ouro.
+        if (!GameManager.Instance.HasStamina())
         {
-            StartCoroutine(SwingHammer());
+            SpawnFloatingText("Cansado!");
+            return;
         }
+
+        GameManager.Instance.ConsumeStaminaForHit();
+
+        int amount = GameManager.Instance.RegisterHit();
+        bool isCrit = GameManager.Instance.LastHitWasCrit;
+
+        SpawnFloatingText(isCrit ? "<color=#FFD24C>+" + amount + " CRITICO!</color>" : "+" + amount);
+        ShowSpark();
+        // A animacao de martelada agora roda em QUALQUER clique (ver
+        // HammerFollowMouse.Update()), entao nao precisa disparar de novo aqui.
     }
 
-    private void SpawnFloatingText(string text)
+    /// <summary>Publico pra outros scripts (ex: aviso de "solte o martelo" da loja) poderem usar o mesmo popup de texto.</summary>
+    public void SpawnFloatingText(string text)
     {
         if (floatingTextPrefab == null) return;
 
-        Vector3 spawnPos = floatingTextSpawnPoint != null
-            ? floatingTextSpawnPoint.position
-            : transform.position + Vector3.up * 0.5f;
+        Vector3 spawnPos = GetFloatingTextSpawnPosition() + floatingTextOffset;
 
         GameObject go = Instantiate(floatingTextPrefab, spawnPos, Quaternion.identity);
         FloatingText ft = go.GetComponent<FloatingText>();
@@ -81,59 +144,73 @@ public class AnvilClicker : MonoBehaviour
         }
     }
 
-    private void PunchAnvil()
+    /// <summary>
+    /// De preferencia nasce em cima da cabeca do martelo (com ele na mao, e
+    /// onde a martelada de fato aconteceu). Sem o martelo, cai pro mouse real
+    /// - caso da dica "Pegue o martelo!".
+    /// </summary>
+    private Vector3 GetFloatingTextSpawnPosition()
     {
-        StopCoroutine(nameof(PunchScaleRoutine));
-        StartCoroutine(PunchScaleRoutine());
+        if (HammerFollowMouse.Instance != null && HammerFollowMouse.Instance.IsHolding)
+        {
+            Vector3 headPos = HammerFollowMouse.Instance.GetHammerHeadWorldPosition();
+            headPos.z = transform.position.z;
+            return headPos;
+        }
+
+        return GetMouseWorldPosition();
     }
 
-    private IEnumerator PunchScaleRoutine()
+    /// <summary>Converte a posicao real do mouse (tela) pra posicao no mundo 2D, na mesma profundidade da bigorna.</summary>
+    private Vector3 GetMouseWorldPosition()
     {
-        Vector3 target = anvilBaseScale * (1f - punchScale);
-        float half = 0.05f;
-        float t = 0f;
-
-        while (t < half)
+        if (Camera.main != null && Mouse.current != null)
         {
-            t += Time.deltaTime;
-            transform.localScale = Vector3.Lerp(anvilBaseScale, target, t / half);
-            yield return null;
+            Vector2 screenPos = Mouse.current.position.ReadValue();
+            float distanceFromCamera = -Camera.main.transform.position.z;
+            Vector3 worldPos = Camera.main.ScreenToWorldPoint(new Vector3(screenPos.x, screenPos.y, distanceFromCamera));
+            worldPos.z = transform.position.z;
+            return worldPos;
         }
 
-        t = 0f;
-        while (t < half)
-        {
-            t += Time.deltaTime;
-            transform.localScale = Vector3.Lerp(target, anvilBaseScale, t / half);
-            yield return null;
-        }
-
-        transform.localScale = anvilBaseScale;
+        // Fallback, caso nao consiga ler o mouse por algum motivo.
+        return floatingTextSpawnPoint != null
+            ? floatingTextSpawnPoint.position
+            : transform.position + Vector3.up * 0.5f;
     }
 
-    private IEnumerator SwingHammer()
+    /// <summary>Mostra a faisca por cima da bigorna, no lugar da bigorna "balancando".</summary>
+    private void ShowSpark()
     {
-        isSwinging = true;
+        if (hitSpark == null) return;
 
-        Quaternion down = hammerRestRotation * Quaternion.Euler(0f, 0f, -swingAngle);
+        if (sparkRoutine != null)
+        {
+            StopCoroutine(sparkRoutine);
+        }
+        sparkRoutine = StartCoroutine(SparkRoutine());
+    }
+
+    private IEnumerator SparkRoutine()
+    {
+        hitSpark.gameObject.SetActive(true);
+
+        Color c = hitSpark.color;
+        c.a = 1f;
+        hitSpark.color = c;
+        hitSpark.transform.localScale = Vector3.one * 0.6f;
+
         float t = 0f;
-
-        while (t < swingDuration)
+        while (t < sparkDuration)
         {
             t += Time.deltaTime;
-            hammer.localRotation = Quaternion.Lerp(hammerRestRotation, down, t / swingDuration);
+            float p = t / sparkDuration;
+            hitSpark.transform.localScale = Vector3.Lerp(Vector3.one * 0.6f, Vector3.one * 1.15f, p);
+            c.a = Mathf.Lerp(1f, 0f, p);
+            hitSpark.color = c;
             yield return null;
         }
 
-        t = 0f;
-        while (t < swingDuration)
-        {
-            t += Time.deltaTime;
-            hammer.localRotation = Quaternion.Lerp(down, hammerRestRotation, t / swingDuration);
-            yield return null;
-        }
-
-        hammer.localRotation = hammerRestRotation;
-        isSwinging = false;
+        hitSpark.gameObject.SetActive(false);
     }
 }
