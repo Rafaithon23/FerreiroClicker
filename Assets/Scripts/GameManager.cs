@@ -12,7 +12,8 @@ public enum UpgradeEffect
     CritChance,           // aumenta a chance de golpe critico
     GoldPerSecond,        // aumenta a producao passiva de ouro
     StaminaCostReduction, // reduz o gasto de resistencia por martelada
-    MaxStaminaIncrease    // aumenta a resistencia maxima do braco
+    MaxStaminaIncrease,   // aumenta a resistencia maxima do braco
+    HammerUpgrade         // compra de tier de martelo (nao soma generico - ver GameManager.HammerTier)
 }
 
 /// <summary>
@@ -73,6 +74,10 @@ public class GameManager : MonoBehaviour
     /// <summary>Catalogo completo da loja. Montado em Awake.</summary>
     public List<UpgradeDefinition> Upgrades { get; private set; }
 
+    public bool CampaignCompleted { get; private set; }
+    public event Action OnCampaignCompleted;
+    private const string KEY_CAMPAIGN_COMPLETED = "bc_campaign_completed";
+
     private double gold;
     private double totalGoldEarned;
     private float currentStamina;
@@ -117,6 +122,13 @@ public class GameManager : MonoBehaviour
     /// <summary>Disparado quando algum upgrade da loja e comprado.</summary>
     public event Action OnUpgradeChanged;
 
+    /// <summary>
+    /// Disparado quando o tier do martelo muda (compra do Martelo Reforcado ou
+    /// do Martelo Lendario). HammerPickup/HammerFollowMouse escutam isso pra
+    /// trocar a sprite do martelo (suporte e luva) na hora.
+    /// </summary>
+    public event Action<int> OnHammerTierChanged;
+
     /// <summary>Disparado quando a resistencia do braco muda (current, max).</summary>
     public event Action<float, float> OnStaminaChanged;
 
@@ -130,7 +142,55 @@ public class GameManager : MonoBehaviour
     public float MaxStamina => baseMaxStamina + (float)GetEffectTotal(UpgradeEffect.MaxStaminaIncrease);
     public float StaminaCostPerHit => Mathf.Max(minStaminaCostPerHit, baseStaminaCostPerHit - (float)GetEffectTotal(UpgradeEffect.StaminaCostReduction)) * tempStaminaCostMultiplier;
     public int GoldPerClick => Mathf.Max(1, Mathf.RoundToInt((startingGoldPerClick + (int)GetEffectTotal(UpgradeEffect.GoldPerClick)) * tempGoldPerClickMultiplier * (1f + goldPerClickBonusPercent / 100f)));
-    public float CritChance => Mathf.Min(maxCritChance, (float)GetEffectTotal(UpgradeEffect.CritChance));
+    public float CritChance => Mathf.Min(maxCritChance, (float)GetEffectTotal(UpgradeEffect.CritChance) + HammerCritBonusPercent);
+
+    /// <summary>
+    /// Tier atual do martelo: 1 = martelo base (sempre), 2 = Martelo Reforcado,
+    /// 3 = Martelo Lendario. Usado pelo dano contra hordas, pelo bonus de
+    /// critico acima e pela troca de sprite (HammerPickup/HammerFollowMouse).
+    /// </summary>
+    public int HammerTier
+    {
+        get
+        {
+            var tier3 = GetUpgrade("hammer_tier3");
+            if (tier3 != null && tier3.level > 0) return 3;
+
+            var tier2 = GetUpgrade("hammer_tier2");
+            if (tier2 != null && tier2.level > 0) return 2;
+
+            return 1;
+        }
+    }
+
+    /// <summary>Dano (em "vida") que cada martelada tira de um inimigo de horda, conforme o tier do martelo.</summary>
+    public int HammerDamagePerHit
+    {
+        get
+        {
+            switch (HammerTier)
+            {
+                case 3: return 4;
+                case 2: return 2;
+                default: return 1;
+            }
+        }
+    }
+
+    /// <summary>Bonus de chance de critico (fracao, ex: 0.03 = +3%) concedido pelo tier do martelo.</summary>
+    private float HammerCritBonusPercent
+    {
+        get
+        {
+            switch (HammerTier)
+            {
+                case 3: return 0.08f;
+                case 2: return 0.03f;
+                default: return 0f;
+            }
+        }
+    }
+
     public double GoldPerSecond => GetEffectTotal(UpgradeEffect.GoldPerSecond) * tempGoldPerSecondMultiplier * (1f + goldPerSecondBonusPercent / 100f);
 
     private void Awake()
@@ -149,6 +209,7 @@ public class GameManager : MonoBehaviour
 
     private void Update()
     {
+        if (CampaignCompleted) return;
         // Regenera a resistencia do braco aos poucos.
         if (currentStamina < MaxStamina)
         {
@@ -261,6 +322,31 @@ public class GameManager : MonoBehaviour
                 perLevelAmount = 8,
                 maxLevel = 15,
             },
+            new UpgradeDefinition
+            {
+                id = "hammer_tier2",
+                displayName = "Martelo Reforcado",
+                description = "Dobra o dano contra as hordas, +3% de critico",
+                effect = UpgradeEffect.HammerUpgrade,
+                baseCost = 3000,
+                costMultiplier = 1f,
+                perLevelAmount = 0,
+                maxLevel = 1,
+            },
+            new UpgradeDefinition
+            {
+                id = "hammer_tier3",
+                displayName = "Martelo Lendario",
+                description = "Dano devastador contra as hordas, +8% de critico",
+                effect = UpgradeEffect.HammerUpgrade,
+                baseCost = 25000,
+                costMultiplier = 1f,
+                perLevelAmount = 0,
+                maxLevel = 1,
+                requiresUpgradeId = "hammer_tier2",
+                requiresUpgradeLevel = 1,
+                unlockHint = "Compre o Martelo Reforcado",
+            },
         };
 
         foreach (var u in Upgrades)
@@ -292,9 +378,39 @@ public class GameManager : MonoBehaviour
         return req != null && req.level >= u.requiresUpgradeLevel;
     }
 
+    /// <summary>Actual before/after values for one purchase, including caps and horde bonuses.</summary>
+    public string GetNextUpgradePreview(UpgradeDefinition u)
+    {
+        if (u == null) return "";
+        switch (u.effect)
+        {
+            case UpgradeEffect.GoldPerClick:
+                int nextClick = Mathf.Max(1, Mathf.RoundToInt((startingGoldPerClick + (int)(GetEffectTotal(u.effect) + u.perLevelAmount)) * tempGoldPerClickMultiplier * (1 + goldPerClickBonusPercent / 100f)));
+                return GoldPerClick + " → " + nextClick + " ouro / golpe";
+            case UpgradeEffect.CritChance:
+                float nextCrit = Mathf.Min(maxCritChance, (float)(GetEffectTotal(u.effect) + u.perLevelAmount) + HammerCritBonusPercent);
+                return (CritChance * 100).ToString("0.#") + "% → " + (nextCrit * 100).ToString("0.#") + "% de crítico";
+            case UpgradeEffect.GoldPerSecond:
+                double nextSecond = GoldPerSecond + u.perLevelAmount * tempGoldPerSecondMultiplier * (1 + goldPerSecondBonusPercent / 100f);
+                return UIManager.FormatNumber(GoldPerSecond) + " → " + UIManager.FormatNumber(nextSecond) + " ouro / segundo";
+            case UpgradeEffect.StaminaCostReduction:
+                float nextCost = Mathf.Max(minStaminaCostPerHit, baseStaminaCostPerHit - (float)(GetEffectTotal(u.effect) + u.perLevelAmount)) * tempStaminaCostMultiplier;
+                return StaminaCostPerHit.ToString("0.#") + " → " + nextCost.ToString("0.#") + " resistência / golpe";
+            case UpgradeEffect.MaxStaminaIncrease:
+                return MaxStamina.ToString("0") + " → " + (MaxStamina + u.perLevelAmount).ToString("0") + " resistência máxima";
+            case UpgradeEffect.HammerUpgrade:
+                int tier = u.id == "hammer_tier3" ? 3 : 2;
+                int damage = tier == 3 ? 4 : 2;
+                float bonus = tier == 3 ? .08f : .03f;
+                float crit = Mathf.Min(maxCritChance, (float)GetEffectTotal(UpgradeEffect.CritChance) + bonus);
+                return HammerDamagePerHit + " → " + damage + " dano • " + (crit * 100).ToString("0.#") + "% crítico";
+            default: return u.description;
+        }
+    }
+
     public bool CanBuy(UpgradeDefinition u)
     {
-        if (u == null) return false;
+        if (CampaignCompleted || u == null) return false;
         if (!IsUnlocked(u)) return false;
         if (u.maxLevel > 0 && u.level >= u.maxLevel) return false;
         return gold >= u.currentCost;
@@ -315,6 +431,12 @@ public class GameManager : MonoBehaviour
 
         OnGoldChanged?.Invoke(gold);
         OnUpgradeChanged?.Invoke();
+
+        if (id == "hammer_tier2" || id == "hammer_tier3")
+        {
+            OnHammerTierChanged?.Invoke(HammerTier);
+        }
+
         SaveGame();
         hasUnsavedChanges = false;
         autosaveTimer = 0f;
@@ -371,6 +493,8 @@ public class GameManager : MonoBehaviour
     {
         goldPerClickBonusPercent += percent;
         hasUnsavedChanges = true;
+        OnUpgradeChanged?.Invoke();
+        SaveGame();
     }
 
     /// <summary>Concede permanentemente +percent% de ouro por segundo (escolha da tela pos-Horda).</summary>
@@ -378,6 +502,8 @@ public class GameManager : MonoBehaviour
     {
         goldPerSecondBonusPercent += percent;
         hasUnsavedChanges = true;
+        OnUpgradeChanged?.Invoke();
+        SaveGame();
     }
 
     /// <summary>Concede ouro bonus (ex: recompensa por limpar uma Horda). Conta como ouro total ganho.</summary>
@@ -402,8 +528,19 @@ public class GameManager : MonoBehaviour
         hasUnsavedChanges = true;
     }
 
+    public bool TryCompleteCampaign(int defeatedEnemyTier)
+    {
+        if (CampaignCompleted || !CampaignRules.IsVictory(HammerTier, defeatedEnemyTier, true)) return false;
+        CampaignCompleted = true;
+        SaveGame();
+        hasUnsavedChanges = false;
+        OnCampaignCompleted?.Invoke();
+        return true;
+    }
+
     private void SaveGame()
     {
+        PlayerPrefs.SetInt(KEY_CAMPAIGN_COMPLETED, CampaignCompleted ? 1 : 0);
         // Usamos string (InvariantCulture) em vez de float pra nao perder precisao
         // quando o numero de ouro ficar bem grande.
         PlayerPrefs.SetString(KEY_GOLD, gold.ToString(CultureInfo.InvariantCulture));
@@ -422,6 +559,7 @@ public class GameManager : MonoBehaviour
 
     private void LoadGame()
     {
+        CampaignCompleted = PlayerPrefs.GetInt(KEY_CAMPAIGN_COMPLETED, 0) == 1;
         gold = PlayerPrefs.HasKey(KEY_GOLD)
             ? double.Parse(PlayerPrefs.GetString(KEY_GOLD), CultureInfo.InvariantCulture)
             : 0;
@@ -467,6 +605,7 @@ public class GameManager : MonoBehaviour
     public void ResetProgress()
     {
         PlayerPrefs.DeleteAll();
+        CampaignCompleted = false;
         BuildCatalog();
         gold = 0;
         totalGoldEarned = 0;

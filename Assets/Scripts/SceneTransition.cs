@@ -22,6 +22,8 @@ public class SceneTransition : MonoBehaviour
     public float fadeDuration = 0.5f;
 
     private Image fadeImage;
+    private bool isLoading;
+    private Coroutine initialFade;
 
     private void Awake()
     {
@@ -39,7 +41,7 @@ public class SceneTransition : MonoBehaviour
     private void Start()
     {
         // Fade-in ao nascer (cobre o load inicial da propria cena do menu).
-        StartCoroutine(FadeRoutine(1f, 0f));
+        initialFade = StartCoroutine(FadeRoutine(1f, 0f));
     }
 
     private void BuildUi()
@@ -73,12 +75,20 @@ public class SceneTransition : MonoBehaviour
     /// <summary>Troca de cena com fade preto no meio (fecha, carrega, abre).</summary>
     public void LoadScene(string sceneName)
     {
+        if (isLoading) return;
+        if (!Application.CanStreamedLevelBeLoaded(sceneName))
+        {
+            Debug.LogError("Cena indisponível: " + sceneName);
+            return;
+        }
+        isLoading = true;
+        if (initialFade != null) { StopCoroutine(initialFade); initialFade = null; }
         StartCoroutine(LoadSceneRoutine(sceneName));
     }
 
     private IEnumerator LoadSceneRoutine(string sceneName)
     {
-        yield return StartCoroutine(FadeRoutine(0f, 1f));
+        yield return StartCoroutine(FadeRoutine(fadeImage != null ? fadeImage.color.a : 0f, 1f));
 
         AsyncOperation op = SceneManager.LoadSceneAsync(sceneName);
         if (op != null)
@@ -87,6 +97,7 @@ public class SceneTransition : MonoBehaviour
         }
 
         yield return StartCoroutine(FadeRoutine(1f, 0f));
+        isLoading = false;
     }
 
     private IEnumerator FadeRoutine(float from, float to)
@@ -99,7 +110,7 @@ public class SceneTransition : MonoBehaviour
 
         while (t < fadeDuration)
         {
-            t += Time.deltaTime;
+            t += Time.unscaledDeltaTime;
             SetAlpha(Mathf.Lerp(from, to, Mathf.Clamp01(t / fadeDuration)));
             yield return null;
         }

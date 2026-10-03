@@ -6,6 +6,11 @@ using UnityEngine.UI;
 public class EnemyTarget : MonoBehaviour
 {
     private int currentHp;
+    private int maxHp;
+    private Image healthFill;
+    private Text healthText;
+    private Coroutine flashRoutine;
+    public int RemainingHp => currentHp;
     private Image image;
     private Button button;
     private HordeManager horde;
@@ -17,12 +22,14 @@ public class EnemyTarget : MonoBehaviour
     public void Setup(HordeManager owner, int hp, Image img, Button btn, RectTransform rt, Vector2 targetPos, float spawnDuration, float startDelay)
     {
         horde = owner;
-        currentHp = hp;
+        currentHp = maxHp = Mathf.Max(1, hp);
         image = img;
         button = btn;
         rectTransform = rt;
         basePosition = targetPos;
         button.onClick.AddListener(HandleClicked);
+        button.interactable = false;
+        BuildHealthBar();
 
         StartCoroutine(SpawnRoutine(spawnDuration, startDelay));
     }
@@ -54,6 +61,7 @@ public class EnemyTarget : MonoBehaviour
 
         rectTransform.localScale = Vector3.one;
         SetAlpha(1f);
+        if (!dying && button != null) button.interactable = true;
     }
 
     /// <summary>Curva simples (sem AnimationCurve, feita em runtime): 0 -> 0.7 -> 1.1 -> 1.0.</summary>
@@ -66,7 +74,7 @@ public class EnemyTarget : MonoBehaviour
 
     private void HandleClicked()
     {
-        if (dying) return;
+        if (dying || button == null || !button.interactable) return;
         if (horde == null || !horde.IsHordeActive) return;
 
         if (HammerFollowMouse.Instance == null || !HammerFollowMouse.Instance.IsHolding)
@@ -75,13 +83,18 @@ public class EnemyTarget : MonoBehaviour
             return;
         }
 
-        currentHp--;
+        // O dano por martelada sobe conforme o tier do martelo comprado na loja
+        // (Martelo Reforcado / Martelo Lendario - ver GameManager.HammerDamagePerHit).
+        int damage = GameManager.Instance != null ? GameManager.Instance.HammerDamagePerHit : 1;
+        currentHp = Mathf.Max(0, currentHp - damage);
+        RefreshHealth();
 
         if (shakeRoutine != null) StopCoroutine(shakeRoutine);
         shakeRoutine = StartCoroutine(ShakeRoutine());
-        StartCoroutine(FlashRoutine());
+        if (flashRoutine != null) StopCoroutine(flashRoutine);
+        flashRoutine = StartCoroutine(FlashRoutine());
 
-        AnvilClicker.Instance?.SpawnFloatingText("-1");
+        AnvilClicker.Instance?.SpawnFloatingText("-" + damage);
 
         if (currentHp <= 0)
         {
@@ -90,6 +103,39 @@ public class EnemyTarget : MonoBehaviour
             horde.OnEnemyDefeated(this);
             StartCoroutine(DeathRoutine());
         }
+    }
+
+    private void BuildHealthBar()
+    {
+        var track = new GameObject("EnemyHealth", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
+        track.transform.SetParent(rectTransform, false);
+        track.rectTransform.anchorMin = track.rectTransform.anchorMax = new Vector2(.5f, 0);
+        track.rectTransform.anchoredPosition = new Vector2(0, -9);
+        track.rectTransform.sizeDelta = new Vector2(Mathf.Min(78, rectTransform.sizeDelta.x), 7);
+        track.color = new Color(.12f, .025f, .015f); track.raycastTarget = false;
+        healthFill = new GameObject("Fill", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
+        healthFill.transform.SetParent(track.transform, false);
+        healthFill.rectTransform.anchorMin = Vector2.zero; healthFill.rectTransform.anchorMax = Vector2.one;
+        healthFill.rectTransform.offsetMin = healthFill.rectTransform.offsetMax = Vector2.zero;
+        healthFill.rectTransform.pivot = new Vector2(0, .5f);
+        healthFill.color = new Color(.6f, .85f, .3f); healthFill.raycastTarget = false;
+        healthText = new GameObject("EnemyHealthValue", typeof(RectTransform), typeof(Text)).GetComponent<Text>();
+        healthText.transform.SetParent(rectTransform, false);
+        healthText.rectTransform.anchorMin = healthText.rectTransform.anchorMax = new Vector2(.5f, 0);
+        healthText.rectTransform.anchoredPosition = new Vector2(0, -25);
+        healthText.rectTransform.sizeDelta = new Vector2(90, 24);
+        healthText.font = UIManager.Instance != null ? UIManager.Instance.goldText.font : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        healthText.fontSize = 17; healthText.alignment = TextAnchor.MiddleCenter;
+        healthText.color = Color.white; healthText.raycastTarget = false;
+        Outline shadow = healthText.gameObject.AddComponent<Outline>();
+        shadow.effectColor = Color.black; shadow.effectDistance = new Vector2(1, -1);
+        RefreshHealth();
+    }
+
+    private void RefreshHealth()
+    {
+        if (healthFill != null) healthFill.rectTransform.localScale = new Vector3((float)currentHp / maxHp, 1, 1);
+        if (healthText != null) healthText.text = currentHp + "/" + maxHp;
     }
 
     /// <summary>Tremidinha rapida na posicao ao levar um golpe (nao-letal ou nao).</summary>

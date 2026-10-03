@@ -26,6 +26,12 @@ public class HammerFollowMouse : MonoBehaviour
     public Sprite emptyGloveSprite;
     public Sprite heldHammerSprite;
 
+    [Header("Sprites da luva - tiers de martelo (opcional)")]
+    [Tooltip("Luva segurando o Martelo Reforcado. Se nao arrastar nada, continua usando a sprite do tier 1.")]
+    public Sprite heldHammerSpriteTier2;
+    [Tooltip("Luva segurando o Martelo Lendario. Se nao arrastar nada, cai pro tier 2 ou pro tier 1.")]
+    public Sprite heldHammerSpriteTier3;
+
     [Tooltip("Sprite mostrada quando o cursor passa em cima de um botao/UI clicavel (com a mao vazia), tipo o ponteiro do Windows. Opcional - se nao arrastar nada, so continua com a luva vazia.")]
     public Sprite pointerSprite;
 
@@ -89,11 +95,33 @@ public class HammerFollowMouse : MonoBehaviour
         ApplySprite();
     }
 
+    private void OnDisable()
+    {
+        Cursor.visible = true;
+    }
+
+    /// <summary>Chamado pelo GameManager ao comprar um tier novo de martelo - reaplica a sprite (so troca algo se estiver segurando o martelo agora).</summary>
+    private void HandleHammerTierChanged(int tier)
+    {
+        ApplySprite();
+    }
+
     private void Start()
     {
         if (hideSystemCursor)
         {
             Cursor.visible = false;
+        }
+
+        // Assina em Start() (nao em OnEnable) de proposito: so no Start Unity
+        // garante que o Awake() de TODOS os objetos da cena ja rodou - no
+        // OnEnable isso nao e garantido, entao GameManager.Instance podia
+        // ainda estar null aqui (bug: martelo so trocava de sprite depois de
+        // fechar e abrir o jogo de novo). Mesmo padrao que o ShopManager ja
+        // usa pros eventos do GameManager.
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.OnHammerTierChanged += HandleHammerTierChanged;
         }
     }
 
@@ -140,11 +168,20 @@ public class HammerFollowMouse : MonoBehaviour
     private void ApplySprite()
     {
         if (image == null) return;
-        Sprite target = IsHolding ? heldHammerSprite : emptyGloveSprite;
+        Sprite target = IsHolding ? GetHeldSpriteForCurrentTier() : emptyGloveSprite;
         if (target != null)
         {
             image.sprite = target;
         }
+    }
+
+    /// <summary>Sprite da luva segurando o martelo, conforme o tier comprado (cai pro tier anterior se a sprite nao foi arrastada no Inspector).</summary>
+    private Sprite GetHeldSpriteForCurrentTier()
+    {
+        int tier = GameManager.Instance != null ? GameManager.Instance.HammerTier : 1;
+        if (tier >= 3 && heldHammerSpriteTier3 != null) return heldHammerSpriteTier3;
+        if (tier >= 2 && heldHammerSpriteTier2 != null) return heldHammerSpriteTier2;
+        return heldHammerSprite;
     }
 
     /// <summary>
@@ -260,11 +297,7 @@ public class HammerFollowMouse : MonoBehaviour
         rectTransform.localRotation = down;
         punchOffsetCurrent = swingPunch;
 
-        if (impactBurst != null)
-        {
-            if (impactBurstRoutine != null) StopCoroutine(impactBurstRoutine);
-            impactBurstRoutine = StartCoroutine(ImpactBurstRoutine());
-        }
+        // Sparks are emitted by AnvilFeedback only after a confirmed anvil hit.
         if (impactHoldTime > 0f)
         {
             yield return new WaitForSeconds(impactHoldTime);
@@ -309,13 +342,12 @@ public class HammerFollowMouse : MonoBehaviour
         impactBurst.gameObject.SetActive(false);
     }
 
-    private void OnDisable()
-    {
-        Cursor.visible = true;
-    }
-
     private void OnDestroy()
     {
+        if (GameManager.Instance != null)
+        {
+            GameManager.Instance.OnHammerTierChanged -= HandleHammerTierChanged;
+        }
         Cursor.visible = true;
     }
 }

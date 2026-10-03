@@ -1,0 +1,39 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 626b942441f14522ab2420d5e120f5d0, type: 3}
+  m_Name: ShopArtCatalog
+  m_EditorClassIdentifier: 
+  windowSprite: {fileID: 21300000, guid: f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6, type: 3}
+  cardSprite: {fileID: 21300000, guid: a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1, type: 3}
+  categoryPlaque: {fileID: 21300000, guid: b668489412724c918f51528e34187ff7, type: 3}
+  iconFrame: {fileID: 21300000, guid: 79c3d3d90a0c4dc291f252eec43625f5, type: 3}
+  lockSprite: {fileID: 21300000, guid: ba32d39b81324142998d7e5c74d5e06a, type: 3}
+  closeSprite: {fileID: 21300000, guid: 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d, type: 3}
+  titleFont: {fileID: 12800000, guid: b8f2d5a1c4e73690a6d9c2f5b8e1a4d7, type: 3}
+  icons:
+  - {fileID: 21300000, guid: 13266db46c97416494865ceb75e91807, type: 3}
+  - {fileID: 21300000, guid: 492b565550fe481fa759425da8fc68c3, type: 3}
+  - {fileID: 21300000, guid: 00c7966f65324678b7d5b8f0845761e5, type: 3}
+  - {fileID: 21300000, guid: 2dbbab899383461a9dc400e4820cbab8, type: 3}
+  - {fileID: 21300000, guid: 6cf46971c0d34a5faff807bd39b711b9, type: 3}
+  - {fileID: 21300000, guid: f42338fefb2344818923183e81b1a952, type: 3}
+  - {fileID: 21300000, guid: 19d0d0a0eccb4c26956a263d17505760, type: 3}
+  - {fileID: 21300000, guid: ca2f832bc789480499c39d01c9bc3302, type: 3}
+  upgradeIds:
+  - hammer
+  - crit
+  - assistant
+  - forge
+  - bellows
+  - gloves
+  - hammer_tier2
+  - hammer_tier3

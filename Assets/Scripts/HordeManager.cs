@@ -36,7 +36,12 @@ public class HordeManager : MonoBehaviour
 {
     public static HordeManager Instance { get; private set; }
 
-    public enum State { Idle, Darkening, Warning, Active, Resolving }
+    public enum State { Idle, Darkening, Warning, Active, Resolving, Cooldown }
+    public enum AttackPattern { Standard, Rush, Armored }
+    private const string NextHordeKey = "bc_next_horde";
+    public AttackPattern CurrentPattern => (AttackPattern)((Mathf.Max(1, hordeNumber) - 1) % 3);
+    public double NextThreshold => nextThreshold;
+    public int HordeNumber => hordeNumber;
 
     [Header("Gatilho (marcos de ouro TOTAL ganho pra cada horda)")]
     [Tooltip("Marcos, em ordem. Nao precisa ser multiplo nem progressao exata - depois que a lista acaba, repete o padrao de crescimento dos ultimos marcos.")]
@@ -49,6 +54,8 @@ public class HordeManager : MonoBehaviour
     public int enemiesPerTier = 2;
     public int maxEnemyCount = 18;
     public int hpPerEnemy = 3;
+    [Tooltip("Vida extra por tier de inimigo (0=goblin .. 4=cavaleiro negro) - os primeiros tiers tem menos vida, os ultimos mais, pra pressionar a pessoa a melhorar o martelo.")]
+    public int hpIncreasePerTier = 2;
     public float timeLimitSeconds = 20f;
     [Tooltip("Quanto o tempo da horda diminui por horda (em segundos) - fica mais apertado conforme a pessoa avanca.")]
     public float timeReductionPerHorde = 0.5f;
@@ -96,7 +103,7 @@ public class HordeManager : MonoBehaviour
     /// <summary>True durante TODO o evento de horde (escurecendo, aviso, luta
     /// e resolucao) - nao so a luta em si. Usado pra travar o martelo e
     /// congelar o contador de ouro assim que o marco e cruzado.</summary>
-    public bool IsHordeInProgress => CurrentState != State.Idle;
+    public bool IsHordeInProgress => CurrentState != State.Idle && CurrentState != State.Cooldown;
 
     private double nextThreshold;
     private int hordeNumber; // 1 = primeira horda, 2 = segunda, etc. (gatilho + escala de dificuldade)
@@ -114,6 +121,12 @@ public class HordeManager : MonoBehaviour
     private Text buffTextA;
     private Text buffTextB;
     private bool choiceMade;
+    private RectTransform choiceContent;
+    private Image warningPanel;
+    private Image timeFill;
+    private int spawnedCount;
+    private float battleTimeLimit;
+    private Sprite rewardCardSprite;
 
     // Progressao tematica dos inimigos por marco de ouro atingido (baseado
     // na ficha de referencia que o jogador mandou: 10k goblins, 20k orcs,
@@ -161,6 +174,15 @@ public class HordeManager : MonoBehaviour
         { "Enemies/goblin", "Enemies/orc", "Enemies/skeleton", "Enemies/zombie", "Enemies/dark_knight" };
     private Sprite[] tierSprites;
 
+    /// <summary>Vida de cada inimigo da horda atual - cresce com o tier (goblin tem menos, cavaleiro negro tem mais), pra combinar com os upgrades de martelo da loja.</summary>
+    private int GetEffectiveHp()
+    {
+        int hp = Mathf.Max(1, hpPerEnemy + currentTier * hpIncreasePerTier);
+        if (CurrentPattern == AttackPattern.Rush) return Mathf.Max(1, Mathf.CeilToInt(hp * .75f));
+        if (CurrentPattern == AttackPattern.Armored) return hp + 2;
+        return hp;
+    }
+
     /// <summary>Qual "tipo" de horde deveria aparecer pro valor de ouro atual (ver TierNames/TierColors).</summary>
     private int GetEnemyTier(double currentGold)
     {
@@ -177,7 +199,8 @@ public class HordeManager : MonoBehaviour
     private float GetEffectiveTimeLimit()
     {
         float reduced = timeLimitSeconds - (hordeNumber - 1) * timeReductionPerHorde;
-        return Mathf.Max(minTimeLimitSeconds, reduced);
+        float factor = CurrentPattern == AttackPattern.Rush ? .85f : CurrentPattern == AttackPattern.Armored ? 1.15f : 1;
+        return Mathf.Max(minTimeLimitSeconds, reduced * factor);
     }
 
     private float GetEffectivePenaltyPercent()
@@ -216,7 +239,7 @@ public class HordeManager : MonoBehaviour
 
     private void Start()
     {
-        canvas = FindFirstObjectByType<Canvas>();
+        canvas = UIManager.Instance != null ? UIManager.Instance.GetComponentInParent<Canvas>() : FindAnyObjectByType<Canvas>();
         if (canvas == null)
         {
             Debug.LogWarning("HordeManager: nenhum Canvas encontrado na cena, a Horda nao tem onde desenhar a UI.");
@@ -237,6 +260,10 @@ public class HordeManager : MonoBehaviour
 
     private void OnDestroy()
     {
+        if (Instance == this) Instance = null;
+        if (rewardCardSprite != null) Destroy(rewardCardSprite);
+        if (timeFill != null && timeFill.sprite != null) Destroy(timeFill.sprite);
+        if (overlay != null) Destroy(overlay.gameObject);
         if (GameManager.Instance != null)
         {
             GameManager.Instance.OnGoldChanged -= HandleGoldChanged;
@@ -253,7 +280,7 @@ public class HordeManager : MonoBehaviour
     /// </summary>
     private void InitThresholdState(double currentGold)
     {
-        hordeNumber = 1;
+        hordeNumber = Mathf.Clamp(PlayerPrefs.GetInt(NextHordeKey, 1), 1, 10000);
         nextThreshold = GetThresholdForHorde(hordeNumber);
         while (nextThreshold <= currentGold)
         {
@@ -309,7 +336,7 @@ public class HordeManager : MonoBehaviour
     /// </summary>
     private void HandleGoldChanged(double currentGold)
     {
-        if (CurrentState != State.Idle) return;
+        if (CurrentState != State.Idle || (GameManager.Instance != null && GameManager.Instance.CampaignCompleted)) return;
         if (currentGold >= nextThreshold)
         {
             StartCoroutine(RunHorde());
@@ -318,19 +345,30 @@ public class HordeManager : MonoBehaviour
 
     private IEnumerator RunHorde()
     {
+        ShopManager.Instance?.CloseShop();
         CurrentState = State.Darkening;
         currentTier = GetEnemyTier(GameManager.Instance != null ? GameManager.Instance.Gold : 0);
         yield return StartCoroutine(FadeOverlay(0f, darkenAlpha, darkenDuration));
 
         CurrentState = State.Warning;
-        SetBanner($"UMA HORDA DE {TierNames[currentTier]} SE APROXIMA!");
-        yield return new WaitForSeconds(warningDuration);
+        float countdown = Mathf.Max(3f, warningDuration);
+        while (countdown > 0)
+        {
+            bool holding = HammerFollowMouse.Instance != null && HammerFollowMouse.Instance.IsHolding;
+            SetBanner("HORDA " + hordeNumber + " • " + PatternName() + "\n" +
+                TierNames[currentTier] + " EM " + Mathf.CeilToInt(countdown) + "...\n<size=22>" +
+                (holding ? PatternHint() : "PEGUE O MARTELO NO SUPORTE!") + "</size>");
+            countdown -= Time.deltaTime;
+            yield return null;
+        }
         SetBanner("");
 
         CurrentState = State.Active;
         SpawnEnemies();
 
-        float timeLeft = GetEffectiveTimeLimit();
+        yield return new WaitForSeconds(Mathf.Max(.05f, spawnMoveDuration) + Mathf.Max(0, spawnStagger));
+        battleTimeLimit = GetEffectiveTimeLimit();
+        float timeLeft = battleTimeLimit;
         while (timeLeft > 0f && activeEnemies.Count > 0)
         {
             timeLeft -= Time.deltaTime;
@@ -349,6 +387,8 @@ public class HordeManager : MonoBehaviour
             yield return new WaitForSeconds(1f);
             SetBanner("");
 
+            if (GameManager.Instance != null && GameManager.Instance.TryCompleteCampaign(currentTier))
+                yield break;
             yield return StartCoroutine(ShowBuffChoice());
         }
         else
@@ -365,14 +405,17 @@ public class HordeManager : MonoBehaviour
 
         yield return StartCoroutine(FadeOverlay(darkenAlpha, 0f, darkenDuration));
 
-        CurrentState = State.Idle;
+        CurrentState = State.Cooldown;
 
         // Avanca pro proximo marco da lista (ou da progressao estendida),
         // independente de vitoria ou derrota.
         hordeNumber++;
         nextThreshold = GetThresholdForHorde(hordeNumber);
+        PlayerPrefs.SetInt(NextHordeKey, hordeNumber);
+        PlayerPrefs.Save();
 
-        yield return new WaitForSeconds(cooldownAfterHorde);
+        yield return new WaitForSeconds(Mathf.Max(0, cooldownAfterHorde));
+        CurrentState = State.Idle;
 
         // Caso o jogador ja tenha passado de mais de um marco de uma vez
         // (ex: ouro passivo alto), encadeia a proxima horda.
@@ -385,9 +428,9 @@ public class HordeManager : MonoBehaviour
     private IEnumerator ShowBuffChoice()
     {
         choiceMade = false;
-        if (choiceTitle != null) choiceTitle.text = "ESCOLHA UM BONUS PERMANENTE";
-        if (buffTextA != null) buffTextA.text = "+" + GetEffectiveGoldPerClickBuffPercent().ToString("0.#") + "% ouro\npor martelada\n(permanente)";
-        if (buffTextB != null) buffTextB.text = "+" + GetEffectiveGoldPerSecondBuffPercent().ToString("0.#") + "% ouro\ndos trabalhadores\n(permanente)";
+        if (choiceTitle != null) choiceTitle.text = "VITÓRIA! ESCOLHA SUA RECOMPENSA";
+        if (buffTextA != null) buffTextA.text = ClickRewardPreview();
+        if (buffTextB != null) buffTextB.text = WorkerRewardPreview();
         if (choicePanel != null) choicePanel.SetActive(true);
 
         yield return new WaitUntil(() => choiceMade);
@@ -400,14 +443,21 @@ public class HordeManager : MonoBehaviour
         activeEnemies.Clear();
         if (enemyLayer == null) return;
 
-        int count = Mathf.Min(maxEnemyCount,
-            baseEnemyCount + (hordeNumber - 1) * enemiesPerHorde + currentTier * enemiesPerTier);
+        int count = GetEnemyCount();
+        spawnedCount = count;
+        Vector2 area = enemyLayer.rect.size;
+        int columns = Mathf.Max(1, Mathf.Min(6, Mathf.FloorToInt(area.x * .78f / 150f)));
+        int rows = Mathf.CeilToInt((float)count / columns);
 
         for (int i = 0; i < count; i++)
         {
-            Vector2 targetPos = new Vector2(
-                UnityEngine.Random.Range(-700f, 700f),
-                UnityEngine.Random.Range(-220f, 300f));
+            int column = i % columns;
+            int row = i / columns;
+            int rowCount = Mathf.Min(columns, count - row * columns);
+            float spacingX = Mathf.Min(230f, area.x * .78f / Mathf.Max(1, columns));
+            float spacingY = Mathf.Min(145f, area.y * .42f / Mathf.Max(1, rows));
+            Vector2 targetPos = new Vector2((column - (rowCount - 1) * .5f) * spacingX,
+                -area.y * .08f + ((rows - 1) * .5f - row) * spacingY);
 
             GameObject go = new GameObject("HordeEnemy_" + i, typeof(RectTransform));
             go.transform.SetParent(enemyLayer, false);
@@ -440,8 +490,11 @@ public class HordeManager : MonoBehaviour
             // sistema que os outros botoes do jogo ja usam.
             go.AddComponent<HammerClickTarget>();
 
+            float targetHeight = Mathf.Min(110f, Mathf.Max(36f, Mathf.Min(spacingX, spacingY) * .72f));
+            if (tierSprite != null) rt.sizeDelta = GetSpriteDisplaySize(tierSprite, targetHeight);
+            else rt.sizeDelta = Vector2.one * targetHeight;
             EnemyTarget enemy = go.AddComponent<EnemyTarget>();
-            enemy.Setup(this, hpPerEnemy, img, btn, rt, targetPos,
+            enemy.Setup(this, GetEffectiveHp(), img, btn, rt, targetPos,
                 spawnMoveDuration, UnityEngine.Random.Range(0f, spawnStagger));
 
             activeEnemies.Add(enemy);
@@ -471,6 +524,7 @@ public class HordeManager : MonoBehaviour
         overlayRt.anchorMax = Vector2.one;
         overlayRt.offsetMin = Vector2.zero;
         overlayRt.offsetMax = Vector2.zero;
+        overlayRt.localScale = Vector3.one;
 
         overlay = overlayGo.AddComponent<Image>();
         overlay.color = new Color(0f, 0f, 0f, 0f);
@@ -510,7 +564,7 @@ public class HordeManager : MonoBehaviour
         RectTransform timerRt = timerGo.GetComponent<RectTransform>();
         timerRt.anchorMin = new Vector2(0.5f, 0.68f);
         timerRt.anchorMax = new Vector2(0.5f, 0.68f);
-        timerRt.sizeDelta = new Vector2(500, 50);
+        timerRt.sizeDelta = new Vector2(700, 50);
         timerText = timerGo.AddComponent<Text>();
         timerText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         timerText.fontSize = 26;
@@ -519,6 +573,7 @@ public class HordeManager : MonoBehaviour
         timerText.text = "";
         timerText.raycastTarget = false;
 
+        BuildCombatPresentation(overlayGo.transform);
         BuildChoiceUi(overlayGo.transform);
 
         // O cursor (martelo/luva) e filho direto do Canvas tambem - sem isso
@@ -541,9 +596,15 @@ public class HordeManager : MonoBehaviour
         panelRt.anchorMax = Vector2.one;
         panelRt.offsetMin = Vector2.zero;
         panelRt.offsetMax = Vector2.zero;
+        var blocker = choicePanel.AddComponent<Image>();
+        blocker.color = new Color(.025f, .018f, .012f, .75f);
+        choiceContent = new GameObject("RewardContent", typeof(RectTransform)).GetComponent<RectTransform>();
+        choiceContent.SetParent(choicePanel.transform, false);
+        choiceContent.anchorMin = choiceContent.anchorMax = new Vector2(.5f, .5f);
+        choiceContent.sizeDelta = new Vector2(1040, 420);
 
         GameObject titleGo = new GameObject("HordeChoiceTitle", typeof(RectTransform));
-        titleGo.transform.SetParent(choicePanel.transform, false);
+        titleGo.transform.SetParent(choiceContent, false);
         RectTransform titleRt = titleGo.GetComponent<RectTransform>();
         titleRt.anchorMin = new Vector2(0.5f, 0.5f);
         titleRt.anchorMax = new Vector2(0.5f, 0.5f);
@@ -561,20 +622,22 @@ public class HordeManager : MonoBehaviour
         float clickBuff = GetEffectiveGoldPerClickBuffPercent();
         float secondBuff = GetEffectiveGoldPerSecondBuffPercent();
 
-        Button buttonA = CreateChoiceButton(choicePanel.transform, "HordeChoiceButtonA", new Vector2(-260, 0),
+        Button buttonA = CreateChoiceButton(choiceContent, "HordeChoiceButtonA", new Vector2(-260, 0),
             "+" + clickBuff.ToString("0.#") + "% ouro\npor martelada\n(permanente)", out buffTextA);
         buttonA.onClick.AddListener(() =>
         {
+            if (choiceMade) return;
             float percent = GetEffectiveGoldPerClickBuffPercent();
             GameManager.Instance?.AddGoldPerClickBonusPercent(percent);
             AnvilClicker.Instance?.SpawnFloatingText("+" + percent.ToString("0.#") + "% OURO/MARTELADA!");
             choiceMade = true;
         });
 
-        Button buttonB = CreateChoiceButton(choicePanel.transform, "HordeChoiceButtonB", new Vector2(260, 0),
+        Button buttonB = CreateChoiceButton(choiceContent, "HordeChoiceButtonB", new Vector2(260, 0),
             "+" + secondBuff.ToString("0.#") + "% ouro\ndos trabalhadores\n(permanente)", out buffTextB);
         buttonB.onClick.AddListener(() =>
         {
+            if (choiceMade) return;
             float percent = GetEffectiveGoldPerSecondBuffPercent();
             GameManager.Instance?.AddGoldPerSecondBonusPercent(percent);
             AnvilClicker.Instance?.SpawnFloatingText("+" + percent.ToString("0.#") + "% OURO/TRABALHADORES!");
@@ -591,14 +654,30 @@ public class HordeManager : MonoBehaviour
 
         RectTransform rt = go.GetComponent<RectTransform>();
         rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
-        rt.sizeDelta = new Vector2(420, 180);
+        rt.sizeDelta = new Vector2(480, 220);
         rt.anchoredPosition = anchoredPos;
 
         Image img = go.AddComponent<Image>();
-        img.color = new Color(0.3f, 0.22f, 0.1f, 0.97f);
+        img.color = new Color(.12f, .075f, .04f, .98f);
+        var shop = ShopManager.Instance;
+        if (shop != null && shop.cardSprite != null)
+        {
+            if (rewardCardSprite == null)
+            {
+                var texture = shop.cardSprite.texture;
+                Vector4 crop = shop.cardCrop;
+                rewardCardSprite = Sprite.Create(texture, new Rect(crop.x * texture.width, crop.y * texture.height,
+                    crop.z * texture.width, crop.w * texture.height), new Vector2(.5f, .5f), shop.cardSprite.pixelsPerUnit);
+            }
+            img.sprite = rewardCardSprite; img.color = Color.white;
+        }
+        Outline border = go.AddComponent<Outline>();
+        border.effectColor = new Color(.95f, .6f, .12f); border.effectDistance = new Vector2(2, -2);
 
         Button btn = go.AddComponent<Button>();
         btn.targetGraphic = img;
+        var colors = btn.colors; colors.highlightedColor = new Color(1, .88f, .55f); btn.colors = colors;
+        go.AddComponent<HammerClickTarget>();
 
         GameObject textGo = new GameObject(name + "_Text", typeof(RectTransform));
         textGo.transform.SetParent(go.transform, false);
@@ -610,7 +689,9 @@ public class HordeManager : MonoBehaviour
 
         Text text = textGo.AddComponent<Text>();
         text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        text.fontSize = 24;
+        text.fontSize = 25;
+        text.fontStyle = FontStyle.Bold;
+        text.supportRichText = true;
         text.alignment = TextAnchor.MiddleCenter;
         text.color = Color.white;
         text.text = label;
@@ -643,14 +724,93 @@ public class HordeManager : MonoBehaviour
     private void SetBanner(string text)
     {
         if (banner != null) banner.text = text;
+        if (warningPanel != null) warningPanel.gameObject.SetActive(!string.IsNullOrEmpty(text));
     }
 
     private void SetTimerText(float secondsLeft)
     {
         if (timerText == null) return;
-        timerText.text = secondsLeft >= 0f
-            ? "Tempo: " + Mathf.CeilToInt(secondsLeft) + "s   |   Inimigos: " + activeEnemies.Count
-            : "";
+        timerText.gameObject.SetActive(secondsLeft >= 0);
+        if (timeFill != null)
+        {
+            timeFill.transform.parent.gameObject.SetActive(secondsLeft >= 0);
+            timeFill.fillAmount = battleTimeLimit > 0 ? Mathf.Clamp01(secondsLeft / battleTimeLimit) : 0;
+            timeFill.color = secondsLeft <= 5 ? new Color(1, .28f, .15f) : new Color(1, .70f, .2f);
+        }
+        timerText.color = secondsLeft <= 5 ? new Color(1, .5f, .35f) : Color.white;
+        timerText.text = secondsLeft >= 0 ? "HORDA " + hordeNumber + " • " + Mathf.CeilToInt(secondsLeft) + "s • " +
+            (spawnedCount - activeEnemies.Count) + "/" + spawnedCount + " derrotados" : "";
+    }
+
+    private int GetEnemyCount()
+    {
+        int count = baseEnemyCount + (hordeNumber - 1) * enemiesPerHorde + currentTier * enemiesPerTier;
+        if (CurrentPattern == AttackPattern.Rush) count += 2;
+        else if (CurrentPattern == AttackPattern.Armored) count = Mathf.CeilToInt(count * .8f);
+        return Mathf.Clamp(count, 1, Mathf.Max(1, maxEnemyCount));
+    }
+
+    private string PatternName() => CurrentPattern == AttackPattern.Rush ? "ATAQUE RÁPIDO" :
+        CurrentPattern == AttackPattern.Armored ? "VANGUARDA BLINDADA" : "INVASÃO";
+    private string PatternHint() => CurrentPattern == AttackPattern.Rush ? "Mais inimigos, menos vida. Acerte rápido!" :
+        CurrentPattern == AttackPattern.Armored ? "Menos inimigos, mais resistentes. Use um martelo melhor!" : "Derrote todos antes do tempo acabar para ganhar um bônus permanente.";
+
+    private string ClickRewardPreview()
+    {
+        float current = GameManager.Instance != null ? GameManager.Instance.GoldPerClickBonusPercent : 0;
+        return "FORÇA DO FERREIRO\n<color=#F9E77E>+" + GetEffectiveGoldPerClickBuffPercent().ToString("0.#") +
+            "% ouro por golpe</color>\n<size=21>Bônus total: " + current.ToString("0.#") + "% → " +
+            (current + GetEffectiveGoldPerClickBuffPercent()).ToString("0.#") + "%\nPERMANENTE • CLIQUE PARA ESCOLHER</size>";
+    }
+
+    private string WorkerRewardPreview()
+    {
+        float current = GameManager.Instance != null ? GameManager.Instance.GoldPerSecondBonusPercent : 0;
+        return "OFICINA EFICIENTE\n<color=#F9E77E>+" + GetEffectiveGoldPerSecondBuffPercent().ToString("0.#") +
+            "% ouro por segundo</color>\n<size=21>Bônus total: " + current.ToString("0.#") + "% → " +
+            (current + GetEffectiveGoldPerSecondBuffPercent()).ToString("0.#") + "%\nPERMANENTE • CLIQUE PARA ESCOLHER</size>";
+    }
+
+    private void BuildCombatPresentation(Transform parent)
+    {
+        warningPanel = new GameObject("HordeWarningPanel", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
+        warningPanel.transform.SetParent(parent, false);
+        RectTransform rect = warningPanel.rectTransform;
+        rect.anchorMin = rect.anchorMax = new Vector2(.5f, .82f);
+        rect.sizeDelta = new Vector2(1120, 164);
+        warningPanel.color = new Color(.08f, .045f, .025f, .97f); warningPanel.raycastTarget = false;
+        var edge = warningPanel.gameObject.AddComponent<Outline>();
+        edge.effectColor = new Color(.8f, .41f, .13f); edge.effectDistance = new Vector2(2, -2);
+        banner.transform.SetParent(rect, false);
+        banner.rectTransform.anchorMin = Vector2.zero; banner.rectTransform.anchorMax = Vector2.one;
+        banner.rectTransform.offsetMin = new Vector2(18, 8); banner.rectTransform.offsetMax = new Vector2(-18, -8);
+        banner.fontSize = 29; banner.verticalOverflow = VerticalWrapMode.Truncate;
+        warningPanel.gameObject.SetActive(false);
+        var track = new GameObject("HordeTimeTrack", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
+        track.transform.SetParent(parent, false);
+        track.rectTransform.anchorMin = track.rectTransform.anchorMax = new Vector2(.5f, .64f);
+        track.rectTransform.sizeDelta = new Vector2(600, 10);
+        track.color = new Color(.15f, .10f, .06f); track.raycastTarget = false;
+        timeFill = new GameObject("HordeTimeFill", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
+        timeFill.transform.SetParent(track.transform, false);
+        timeFill.rectTransform.anchorMin = Vector2.zero; timeFill.rectTransform.anchorMax = Vector2.one;
+        timeFill.rectTransform.offsetMin = timeFill.rectTransform.offsetMax = Vector2.zero;
+        timeFill.type = Image.Type.Filled;
+        timeFill.fillMethod = Image.FillMethod.Horizontal; timeFill.fillOrigin = 0; timeFill.raycastTarget = false;
+        // A full solid rect is used for the timer instead of the circular fallback sprite.
+        timeFill.sprite = Sprite.Create(Texture2D.whiteTexture, new Rect(0, 0, Texture2D.whiteTexture.width, Texture2D.whiteTexture.height), new Vector2(.5f, .5f));
+        track.gameObject.SetActive(false);
+    }
+
+    private void LateUpdate()
+    {
+        if (canvas == null) return;
+        Vector2 area = ((RectTransform)canvas.transform).rect.size;
+        if (choiceContent != null)
+            choiceContent.localScale = Vector3.one * Mathf.Clamp(Mathf.Min((area.x - 48) / 1040, (area.y - 48) / 420), .1f, 1);
+        if (warningPanel != null) warningPanel.rectTransform.localScale = Vector3.one * Mathf.Clamp((area.x - 48) / 1120, .1f, 1);
+        if (timerText != null) timerText.rectTransform.localScale = Vector3.one * Mathf.Clamp((area.x - 48) / 700, .1f, 1);
+        if (timeFill != null) timeFill.transform.parent.localScale = Vector3.one * Mathf.Clamp((area.x - 48) / 600, .1f, 1);
     }
 
     /// <summary>Mantem a proporcao original do sprite, encaixando na altura alvo (em pixels de UI).</summary>

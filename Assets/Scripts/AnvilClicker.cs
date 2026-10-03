@@ -30,11 +30,14 @@ public class AnvilClicker : MonoBehaviour
     public static AnvilClicker Instance { get; private set; }
 
     private Collider2D anvilCollider;
+    private AnvilFeedback feedback;
 
     private void Awake()
     {
         Instance = this;
         anvilCollider = GetComponent<Collider2D>();
+        feedback = GetComponent<AnvilFeedback>();
+        if (feedback == null) feedback = gameObject.AddComponent<AnvilFeedback>();
     }
 
     // OnMouseDown so serve mais de dica ("Pegue o martelo!") quando o jogador
@@ -55,6 +58,7 @@ public class AnvilClicker : MonoBehaviour
     // de verdade fica escondido e deslocado da luva desenhada na tela).
     private void Update()
     {
+        if (GameManager.Instance != null && GameManager.Instance.CampaignCompleted) return;
         if (Mouse.current == null) return;
         if (!Mouse.current.leftButton.wasPressedThisFrame) return;
 
@@ -107,13 +111,18 @@ public class AnvilClicker : MonoBehaviour
         int amount = GameManager.Instance.RegisterHit();
         bool isCrit = GameManager.Instance.LastHitWasCrit;
 
-        SpawnFloatingText(isCrit ? "<color=#FFD24C>+" + amount + " CRITICO!</color>" : "+" + amount);
+        Vector3 contact = HammerFollowMouse.Instance != null ? HammerFollowMouse.Instance.GetHammerHeadWorldPosition() : transform.position;
+        if (anvilCollider != null) contact = anvilCollider.ClosestPoint(contact);
+        feedback?.PlayHit(contact, isCrit);
+        UIManager.Instance?.NotifyHit(isCrit);
+        WorkshopPresentation.Instance?.NotifyAnvilHit();
+        SpawnFloatingText(isCrit ? "+" + amount + " CRÍTICO!" : "+" + amount, isCrit);
         // A animacao de martelada agora roda em QUALQUER clique (ver
         // HammerFollowMouse.Update()), entao nao precisa disparar de novo aqui.
     }
 
     /// <summary>Publico pra outros scripts (ex: aviso de "solte o martelo" da loja) poderem usar o mesmo popup de texto.</summary>
-    public void SpawnFloatingText(string text)
+    public void SpawnFloatingText(string text, bool critical = false)
     {
         if (floatingTextPrefab == null) return;
 
@@ -123,7 +132,7 @@ public class AnvilClicker : MonoBehaviour
         FloatingText ft = go.GetComponent<FloatingText>();
         if (ft != null)
         {
-            ft.Setup(text);
+            ft.Setup(text, critical);
         }
     }
 

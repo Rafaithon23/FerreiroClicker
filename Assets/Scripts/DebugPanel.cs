@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.InputSystem;
 
 /// <summary>
 /// FERRAMENTA DE DEBUG - so pra testar mais rapido durante o desenvolvimento
@@ -18,12 +19,24 @@ public class DebugPanel : MonoBehaviour
     [Tooltip("Valores de ouro que cada botao adiciona de uma vez.")]
     public double[] amounts = { 1000, 10000, 25000, 50000, 80000, 150000 };
 
+    private GameObject panel;
+
+    private void Update()
+    {
+#if UNITY_EDITOR
+        if (panel != null && Keyboard.current != null && Keyboard.current.f3Key.wasPressedThisFrame)
+            panel.SetActive(!panel.activeSelf);
+#endif
+    }
+
     private void Start()
     {
-        Canvas canvas = FindFirstObjectByType<Canvas>();
+#if UNITY_EDITOR
+        Canvas canvas = UIManager.Instance != null ? UIManager.Instance.GetComponentInParent<Canvas>() : FindAnyObjectByType<Canvas>();
         if (canvas == null) return;
 
         GameObject panelGo = new GameObject("DebugPanelUI", typeof(RectTransform));
+        panel = panelGo;
         panelGo.transform.SetParent(canvas.transform, false);
 
         RectTransform panelRt = panelGo.GetComponent<RectTransform>();
@@ -54,6 +67,8 @@ public class DebugPanel : MonoBehaviour
                 GameManager.Instance?.AddBonusGold(amountCopy);
             });
         }
+        panelGo.SetActive(false);
+#endif
     }
 
     private void CreateLabel(Transform parent, string text)
@@ -106,3 +121,4 @@ public class DebugPanel : MonoBehaviour
         t.raycastTarget = false;
     }
 }
+
