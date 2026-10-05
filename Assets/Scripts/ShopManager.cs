@@ -84,7 +84,7 @@ public class ShopManager : MonoBehaviour
             windowImage.type = Image.Type.Simple;
         }
 
-        SetHeading("ShopTitle", "SHOP", 465f, 64);
+        SetHeading("ShopTitle", "LOJA", 465f, 64);
         SetHeading("HeaderMartelo", "MARTELO", 345f, 30);
         SetHeading("HeaderOficina", "OFICINA", 130f, 30);
         SetHeading("HeaderResistencia", "RESISTÊNCIA", -85f, 30);
@@ -124,8 +124,16 @@ public class ShopManager : MonoBehaviour
             var colors = card.button.colors;
             colors.disabledColor = new Color(0.8f, 0.8f, 0.85f, 1f);
             card.button.colors = colors;
-            var frame = EnsureImage(rect, "IconFrame", VisibleSprite(iconFrame, frameCrop));
-            Place(frame.rectTransform, new Vector2(-206f, 0f), new Vector2(128f, 128f));
+            // A quiet square backdrop keeps the small pixel icons readable.
+            var frame = EnsureImage(rect, "IconFrame", null);
+            frame.enabled = true;
+            frame.type = Image.Type.Simple;
+            frame.color = new Color(.10f, .085f, .09f, 1f);
+            Place(frame.rectTransform, new Vector2(-206f, 0f), new Vector2(108f, 108f));
+            var frameBorder = frame.GetComponent<Outline>();
+            if (frameBorder == null) frameBorder = frame.gameObject.AddComponent<Outline>();
+            frameBorder.effectColor = new Color(.32f, .25f, .20f, 1f);
+            frameBorder.effectDistance = new Vector2(2f, -2f);
             frame.transform.SetAsFirstSibling();
 
             if (card.icon == null && art != null) card.icon = art.FindIcon(card.upgradeId);
@@ -181,7 +189,7 @@ public class ShopManager : MonoBehaviour
                 if (closeSprite != null) closeImage.sprite = VisibleSprite(closeSprite, closeCrop);
             }
             var label = closeButton.GetComponentInChildren<Text>();
-            if (label != null) label.enabled = false; // The close sprite already contains its X.
+            if (label != null) { label.enabled = true; label.text = "×"; }
         }
         if (purchaseFeedback == null)
         {
@@ -253,7 +261,7 @@ public class ShopManager : MonoBehaviour
         var plaque = EnsureImage(window, objectName + "_Plaque", VisibleSprite(categoryPlaque, plaqueCrop));
         Place(plaque.rectTransform, new Vector2(0f, y), plaqueSize);
         plaque.transform.SetSiblingIndex(heading.GetSiblingIndex());
-        Place(heading as RectTransform, new Vector2(0f, y), new Vector2(plaqueSize.x - 110f, plaqueSize.y - 12f));
+        Place(heading as RectTransform, new Vector2(0f, y), new Vector2(isTitle ? plaqueSize.x - 40f : 520f, plaqueSize.y - 12f));
         var text = heading.GetComponent<Text>();
         if (text == null) return;
         text.text = label;
@@ -409,7 +417,7 @@ public class ShopManager : MonoBehaviour
             bool unlocked = GameManager.Instance.IsUnlocked(def);
             bool maxed = def.maxLevel > 0 && def.level >= def.maxLevel;
             if (lockImages.TryGetValue(card.upgradeId, out Image padlock)) padlock.gameObject.SetActive(!unlocked);
-            Place(card.infoText.rectTransform, new Vector2(unlocked ? 72f : 47f, 0f), new Vector2(unlocked ? 386f : 336f, 118f));
+            Place(card.infoText.rectTransform, new Vector2(unlocked ? 72f : 47f, 0f), new Vector2(unlocked ? 386f : 336f, 132f));
 
             bool affordable = GameManager.Instance.CanBuy(def);
             string title = "<size=24><b>" + def.displayName + "</b></size>";
@@ -421,12 +429,12 @@ public class ShopManager : MonoBehaviour
             }
             else if (maxed)
             {
-                card.infoText.text = title + "\n<size=18>" + def.description + "</size>\n<size=22><color=#BBF18C><b>✓ MÁXIMO</b></color></size>";
+                card.infoText.text = title + "\n<size=18>" + def.description + "</size>\n<size=22><color=#A8BD91><b>✓ MÁXIMO</b></color></size>";
             }
             else
             {
                 string price = UIManager.FormatNumber(def.currentCost) + " ouro";
-                string status = affordable ? "<color=#BBF18C>COMPRAR • " + price + "</color>"
+                string status = affordable ? "<color=#A8BD91>COMPRAR • " + price + "</color>"
                     : "<color=#C9C4D3>" + price + " • faltam " + UIManager.FormatNumber(def.currentCost - GameManager.Instance.Gold) + "</color>";
                 card.infoText.text = title + "\n<size=19>" + GameManager.Instance.GetNextUpgradePreview(def) + "</size>\n<size=18>Nível " + def.level + " → " + (def.level + 1) + "</size>\n<size=20><b>" + status + "</b></size>";
             }
@@ -435,16 +443,17 @@ public class ShopManager : MonoBehaviour
                 card.button.interactable = affordable;
                 var colors = card.button.colors;
                 colors.normalColor = Color.white;
-                colors.highlightedColor = new Color(1, .93f, .72f);
-                colors.pressedColor = new Color(.83f, .70f, .42f);
+                colors.highlightedColor = new Color(1, .94f, .82f);
+                colors.pressedColor = new Color(.77f, .74f, .69f);
                 colors.disabledColor = maxed ? Color.white : new Color(.66f, .63f, .60f, 1);
                 card.button.colors = colors;
                 Outline border = card.button.GetComponent<Outline>();
                 if (border == null) border = card.button.gameObject.AddComponent<Outline>();
-                border.effectColor = maxed ? new Color(.6f, .82f, .35f, .8f) : new Color(1, .62f, .14f, .85f);
+                border.effectColor = maxed ? new Color(.66f, .74f, .57f, .8f) : MinimalVisualTheme.Steel;
                 border.effectDistance = new Vector2(2, -2);
                 border.enabled = affordable || maxed;
             }
         }
     }
 }
+

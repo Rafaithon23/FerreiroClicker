@@ -21,9 +21,16 @@ public class SceneTransition : MonoBehaviour
     [Tooltip("Duracao de cada metade do fade (fechar e depois abrir), em segundos")]
     public float fadeDuration = 0.5f;
 
+    [Header("Abertura do jogo")]
+    [Tooltip("Tempo para o menu surgir suavemente a partir do preto.")]
+    [Min(0.1f)] public float initialFadeDuration = 1.8f;
+    [Tooltip("Breve espera para preparar a interface antes de revelar o menu.")]
+    [Min(0f)] public float initialBlackHold = 0.12f;
+
     private Image fadeImage;
     private bool isLoading;
     private Coroutine initialFade;
+    public bool IsTransitioning => isLoading || initialFade != null || (fadeImage != null && fadeImage.color.a > .01f);
 
     private void Awake()
     {
@@ -40,9 +47,21 @@ public class SceneTransition : MonoBehaviour
 
     private void Start()
     {
-        // Fade-in ao nascer (cobre o load inicial da propria cena do menu).
-        initialFade = StartCoroutine(FadeRoutine(1f, 0f));
+        initialFade = StartCoroutine(RevealInitialScene());
     }
+
+    private IEnumerator RevealInitialScene()
+    {
+        // O tema cria os painéis em Start e termina no frame seguinte.
+        // Mantém a tela coberta até a interface final estar pronta.
+        yield return null;
+        yield return null;
+        if (initialBlackHold > 0f) yield return new WaitForSecondsRealtime(initialBlackHold);
+        yield return FadeRoutine(1f, 0f, initialFadeDuration);
+        initialFade = null;
+    }
+
+    private void OnDestroy() { if (Instance == this) Instance = null; }
 
     private void BuildUi()
     {
@@ -88,7 +107,7 @@ public class SceneTransition : MonoBehaviour
 
     private IEnumerator LoadSceneRoutine(string sceneName)
     {
-        yield return StartCoroutine(FadeRoutine(fadeImage != null ? fadeImage.color.a : 0f, 1f));
+        yield return FadeRoutine(fadeImage != null ? fadeImage.color.a : 0f, 1f, fadeDuration);
 
         AsyncOperation op = SceneManager.LoadSceneAsync(sceneName);
         if (op != null)
@@ -96,22 +115,35 @@ public class SceneTransition : MonoBehaviour
             while (!op.isDone) yield return null;
         }
 
-        yield return StartCoroutine(FadeRoutine(1f, 0f));
+        // Awake/Start, tema e primeiro rebuild do Canvas ficam cobertos.
+        yield return null;
+        yield return null;
+        float readyDeadline = Time.realtimeSinceStartup + 5f;
+        string activeName = SceneManager.GetActiveScene().name;
+        if (activeName == "MainMenu" || activeName == "SampleScene")
+            while (!MinimalVisualTheme.IsReady && Time.realtimeSinceStartup < readyDeadline) yield return null;
+        Canvas.ForceUpdateCanvases();
+        yield return null;
+        yield return FadeRoutine(1f, 0f, fadeDuration);
         isLoading = false;
     }
 
-    private IEnumerator FadeRoutine(float from, float to)
+    private IEnumerator FadeRoutine(float from, float to, float duration)
     {
         if (fadeImage == null) yield break;
 
         fadeImage.raycastTarget = true;
         float t = 0f;
+        duration = Mathf.Max(0.01f, duration);
         SetAlpha(from);
 
-        while (t < fadeDuration)
+        while (t < duration)
         {
-            t += Time.unscaledDeltaTime;
-            SetAlpha(Mathf.Lerp(from, to, Mathf.Clamp01(t / fadeDuration)));
+            t += Mathf.Min(Time.unscaledDeltaTime, .05f); // Um frame lento não pula o fade inteiro.
+            float progress = Mathf.Clamp01(t / duration);
+            // Smootherstep evita mudança brusca de velocidade nas duas pontas.
+            progress = progress * progress * progress * (progress * (progress * 6f - 15f) + 10f);
+            SetAlpha(Mathf.Lerp(from, to, progress));
             yield return null;
         }
 

@@ -26,6 +26,11 @@ public class UIManager : MonoBehaviour
     private float goldPulse;
     private bool criticalPulse;
     private GameManager game;
+    private float lastHudWidth = -1f;
+    private double displayedGold;
+    private bool goldDirty;
+    private float nextGoldRefresh;
+    private static readonly string[] NumberSuffixes = { "", "K", "M", "B", "T" };
 
     private void Awake() { Instance = this; }
 
@@ -173,7 +178,10 @@ public class UIManager : MonoBehaviour
     private void FitHud()
     {
         if (canvasRect == null || hud == null) return;
-        float scale = Mathf.Min(1f, Mathf.Max(.1f, (canvasRect.rect.width - 48f) / 600f));
+        float width = canvasRect.rect.width;
+        if (Mathf.Approximately(width, lastHudWidth)) return;
+        lastHudWidth = width;
+        float scale = Mathf.Min(1f, Mathf.Max(.1f, (width - 48f) / 600f));
         hud.localScale = Vector3.one * scale;
         if (staminaSlider != null)
             staminaSlider.transform.localScale = Vector3.one * Mathf.Min(1f, Mathf.Max(.1f, (canvasRect.rect.width - 40f) / 440f));
@@ -182,18 +190,24 @@ public class UIManager : MonoBehaviour
     private void Update()
     {
         FitHud();
+        if (goldDirty && Time.unscaledTime >= nextGoldRefresh)
+        {
+            goldDirty = false;
+            nextGoldRefresh = Time.unscaledTime + .1f;
+            if (goldText != null) goldText.text = FormatNumber(displayedGold);
+        }
         goldPulse = Mathf.Max(0, goldPulse - Time.deltaTime);
         if (goldText != null)
         {
             float pulse = Mathf.Sin(Mathf.Clamp01(goldPulse / .22f) * Mathf.PI);
             goldText.rectTransform.localScale = Vector3.one * (1f + pulse * (criticalPulse ? .10f : .055f));
-            goldText.color = Color.Lerp(new Color(1f, .92f, .72f), Color.white, pulse);
+            goldText.color = Color.Lerp(MinimalVisualTheme.Cream, Color.white, pulse);
         }
         if (staminaSlider != null)
             staminaSlider.SetValueWithoutNotify(Mathf.Lerp(staminaSlider.value, targetStamina, 1f - Mathf.Exp(-Time.deltaTime * 18f)));
         bool tired = game != null && staminaCurrent < game.StaminaCostPerHit;
         bool low = targetStamina <= .25f;
-        Color color = tired || low ? new Color(1f, .30f, .16f) : targetStamina <= .5f ? new Color(1f, .70f, .38f) : Color.white;
+        Color color = tired || low ? new Color(.86f, .51f, .27f) : targetStamina <= .5f ? new Color(.84f, .68f, .41f) : MinimalVisualTheme.Steel;
         if (staminaFill != null)
         {
             if (low) color.a = .83f + Mathf.Sin(Time.unscaledTime * 6f) * .12f;
@@ -203,7 +217,7 @@ public class UIManager : MonoBehaviour
         {
             string hint = tired ? "CANSADO • RECUPERANDO..." : low ? "RESISTÊNCIA BAIXA" : targetStamina < .995f ? "Recuperando resistência..." : "Pronto para martelar";
             if (staminaHint.text != hint) staminaHint.text = hint;
-            staminaHint.color = tired || low ? new Color(1f, .52f, .33f) : new Color(.94f, .86f, .70f);
+            staminaHint.color = tired || low ? new Color(.86f, .51f, .27f) : MinimalVisualTheme.Cream;
         }
     }
 
@@ -215,7 +229,8 @@ public class UIManager : MonoBehaviour
 
     private void HandleGoldChanged(double gold)
     {
-        if (goldText != null) goldText.text = FormatNumber(gold);
+        displayedGold = gold;
+        goldDirty = true;
     }
 
     private void HandleStaminaChanged(float current, float max)
@@ -272,7 +287,7 @@ public class UIManager : MonoBehaviour
     public static string FormatNumber(double value)
     {
         if (value < 1000) return value.ToString("0");
-        string[] suffixes = { "", "K", "M", "B", "T" };
+        var suffixes = NumberSuffixes;
         int index = 0;
         while (value >= 1000 && index < suffixes.Length - 1) { value /= 1000; index++; }
         return value.ToString("0.0") + suffixes[index];

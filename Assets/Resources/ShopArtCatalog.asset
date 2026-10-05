@@ -12,12 +12,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 626b942441f14522ab2420d5e120f5d0, type: 3}
   m_Name: ShopArtCatalog
   m_EditorClassIdentifier: 
-  windowSprite: {fileID: 21300000, guid: f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6, type: 3}
-  cardSprite: {fileID: 21300000, guid: a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1, type: 3}
-  categoryPlaque: {fileID: 21300000, guid: b668489412724c918f51528e34187ff7, type: 3}
-  iconFrame: {fileID: 21300000, guid: 79c3d3d90a0c4dc291f252eec43625f5, type: 3}
+  windowSprite: {fileID: 0}
+  cardSprite: {fileID: 0}
+  categoryPlaque: {fileID: 0}
+  iconFrame: {fileID: 0}
   lockSprite: {fileID: 21300000, guid: ba32d39b81324142998d7e5c74d5e06a, type: 3}
-  closeSprite: {fileID: 21300000, guid: 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d, type: 3}
+  closeSprite: {fileID: 0}
   titleFont: {fileID: 12800000, guid: b8f2d5a1c4e73690a6d9c2f5b8e1a4d7, type: 3}
   icons:
   - {fileID: 21300000, guid: 13266db46c97416494865ceb75e91807, type: 3}

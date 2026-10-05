@@ -42,6 +42,7 @@ public class HammerClickTarget : MonoBehaviour
 
     private void Update()
     {
+        if (SceneTransition.Instance != null && SceneTransition.Instance.IsTransitioning) return;
         if (Mouse.current == null || !Mouse.current.leftButton.wasPressedThisFrame) return;
         if (button == null || !button.interactable) return;
         if (HammerFollowMouse.Instance == null) return;
